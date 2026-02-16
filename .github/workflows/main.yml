@@ -1,0 +1,56 @@
+name: Win10-BeamNG-MaxFPS
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2019
+    timeout-minutes: 3600
+
+    steps:
+      - name: 1. Setup RDP & High Performance
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c # High Performance Mode
+          Restart-Service -Name TermService -Force
+
+      - name: 2. Install 4GB Software GPU (Mesa3D)
+        run: |
+          # Install Mesa - this is the ONLY way to get above 2 FPS without a real GPU
+          choco install mesa-dist-win -y --no-progress
+          
+          # Force 4GB VRAM in Registry
+          $regPath = "HKLM:\SOFTWARE\Microsoft\DirectX"
+          if (!(Test-Path $regPath)) { New-Item $regPath -Force }
+          New-ItemProperty -Path $regPath -Name "DedicatedVideoMemory" -Value 4294967296 -PropertyType QWORD -Force
+          
+          # Copy Mesa DLLs to System32 so every app uses the software GPU
+          Copy-Item "C:\ProgramData\chocolatey\lib\mesa-dist-win\opengl32.dll" -Destination "C:\Windows\System32\" -Force
+          Write-Host "Software GPU Emulation Active."
+
+      - name: 3. Setup Tailscale & User
+        shell: powershell
+        run: |
+          $pass = "BeamNG@HighFPS"
+          $sec = ConvertTo-SecureString $pass -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $sec -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+
+          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "ts.msi"
+          Start-Process msiexec.exe -ArgumentList "/i", "ts.msi", "/quiet", "/norestart" -Wait
+          
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          & $ts up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=beamng-win10 --accept-routes
+          
+          $ip = & $ts ip -4
+          Add-Content -Path $env:GITHUB_ENV -Value "IP=$ip"
+          Add-Content -Path $env:GITHUB_ENV -Value "PASS=$pass"
+
+      - name: 4. Final Info
+        run: |
+          Write-Host "=============================="
+          Write-Host "IP: $env:IP | User: RDP | Pass: $env:PASS"
+          Write-Host "IMPORTANT: In BeamNG, set Resolution to 1280x720 and Quality to LOWEST."
+          Write-Host "=============================="
+          while($true) { Start-Sleep 300 }
