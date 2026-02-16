@@ -1,4 +1,4 @@
-name: Win10-BeamNG-MaxFPS
+name: Win10-AR-4GB-GPU
 on:
   workflow_dispatch:
 
@@ -8,49 +8,47 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: 1. Setup RDP & High Performance
+      - name: 1. Setup RDP
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
           Set-MpPreference -DisableRealtimeMonitoring $true
-          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c # High Performance Mode
           Restart-Service -Name TermService -Force
 
-      - name: 2. Install 4GB Software GPU (Mesa3D)
+      - name: 2. Inject 4GB GPU & Mesa 3D
         run: |
-          # Install Mesa - this is the ONLY way to get above 2 FPS without a real GPU
-          choco install mesa-dist-win -y --no-progress
-          
-          # Force 4GB VRAM in Registry
-          $regPath = "HKLM:\SOFTWARE\Microsoft\DirectX"
-          if (!(Test-Path $regPath)) { New-Item $regPath -Force }
-          New-ItemProperty -Path $regPath -Name "DedicatedVideoMemory" -Value 4294967296 -PropertyType QWORD -Force
-          
-          # Copy Mesa DLLs to System32 so every app uses the software GPU
-          Copy-Item "C:\ProgramData\chocolatey\lib\mesa-dist-win\opengl32.dll" -Destination "C:\Windows\System32\" -Force
-          Write-Host "Software GPU Emulation Active."
+          # 1. Force 4GB VRAM Registry
+          $regPaths = @("HKLM:\SOFTWARE\Microsoft\DirectX", "HKLM:\SOFTWARE\Intel\GMM")
+          foreach ($p in $regPaths) {
+            if (!(Test-Path $p)) { New-Item $p -Force }
+            New-ItemProperty -Path $p -Name "DedicatedVideoMemory" -Value 4294967296 -PropertyType QWORD -Force
+          }
 
-      - name: 3. Setup Tailscale & User
+          # 2. Direct Download Mesa 3D (Bypassing Choco to avoid path errors)
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/23.1.3/mesa3d-23.1.3-release-msvc.7z"
+          $zip = "$env:TEMP\mesa.7z"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          
+          # Extract using built-in 7zip
+          & 7z x $zip -o"$env:TEMP\mesa" -y
+          
+          # Move DLLs to System32 so they are active globally
+          $mesaDll = "$env:TEMP\mesa\x64\opengl32.dll"
+          if (Test-Path $mesaDll) {
+            Copy-Item $mesaDll -Destination "C:\Windows\System32\" -Force
+            Copy-Item "$env:TEMP\mesa\x64\libgallium_wgl.dll" -Destination "C:\Windows\System32\" -Force
+            Write-Host "Software GPU Driver Injected."
+          }
+
+      - name: 3. Setup User & Connect Tailscale (Hostname: AR)
         shell: powershell
         run: |
-          $pass = "BeamNG@HighFPS"
+          $pass = "AR@BeamNG@2026"
           $sec = ConvertTo-SecureString $pass -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password $sec -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          if (!(Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
+            New-LocalUser -Name "RDP" -Password $sec -AccountNeverExpires
+            Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          }
 
-          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "ts.msi"
-          Start-Process msiexec.exe -ArgumentList "/i", "ts.msi", "/quiet", "/norestart" -Wait
+          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "ts.msi
           
-          $ts = "C:\Program Files\Tailscale\tailscale.exe"
-          & $ts up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=beamng-win10 --accept-routes
-          
-          $ip = & $ts ip -4
-          Add-Content -Path $env:GITHUB_ENV -Value "IP=$ip"
-          Add-Content -Path $env:GITHUB_ENV -Value "PASS=$pass"
-
-      - name: 4. Final Info
-        run: |
-          Write-Host "=============================="
-          Write-Host "IP: $env:IP | User: RDP | Pass: $env:PASS"
-          Write-Host "IMPORTANT: In BeamNG, set Resolution to 1280x720 and Quality to LOWEST."
-          Write-Host "=============================="
-          while($true) { Start-Sleep 300 }
