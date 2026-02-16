@@ -50,5 +50,21 @@ jobs:
             Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           }
 
-          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "ts.msi
+          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "ts.msi"
+          Start-Process msiexec.exe -ArgumentList "/i", "ts.msi", "/quiet", "/norestart" -Wait
           
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          # Hostname set to AR
+          & $ts up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=AR-win10-box --accept-routes
+          
+          $ip = & $ts up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=AR-win10-box --accept-routes; & $ts ip -4
+          echo "IP=$ip" >> $env:GITHUB_ENV
+          echo "PASS=$pass" >> $env:GITHUB_ENV
+
+      - name: 4. Final Info
+        run: |
+          Write-Host "=============================="
+          Write-Host "Device Name: AR"
+          Write-Host "IP: $env:IP | User: RDP | Pass: $env:PASS"
+          Write-Host "=============================="
+          while($true) { Start-Sleep 300 }
